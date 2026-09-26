@@ -1,0 +1,82 @@
+# 部署與維護
+
+## 安裝
+
+WebUFW 可以先獨立啟動；UFW 和 Docker 都是功能選項，不是管理介面的啟動條件。WebUFW 不透過容器部署。
+
+```bash
+sudo ./bin/webufw run
+```
+
+第一次啟動時，終端機會輸出一次性設定碼。於 `http://127.0.0.1:8088` 設定管理者密碼，接著到「設定 → 環境檢查」查看 UFW、Docker Engine 與 ufw-docker。Ubuntu 主機可自行安裝 `ufw`；不使用 Docker 的主機不需安裝 Docker 或 ufw-docker。服務帳號和 systemd 為選用：
+
+```bash
+sudo ./bin/webufw install
+sudo journalctl -u webufw -n 30 --no-pager  # 查看首次設定碼
+```
+
+`install` 預設啟用並啟動 systemd 服務；重新安裝會重啟服務。若只要複製程式與服務檔，使用 `install --no-start`。直接在前景使用 `run` 時，先停止該程序再執行會啟動 systemd 的 `install`，避免兩者爭用監聽位址。
+
+相關路徑（ufw-docker 與 source.json 只在使用者於網頁確認後建立）：
+
+| 路徑 | 用途 |
+|---|---|
+| `/usr/local/bin/webufw` | 單一執行檔 |
+| `/var/lib/webufw/ufw-docker` | 僅在網頁確認後才安裝的選用腳本 |
+| `/var/lib/webufw/source.json` | 所選來源、commit、SHA256 與 URL |
+| `/etc/webufw/config.json` | 首次網頁設定後建立；root:root / 0600，監聽設定及 bcrypt 雜湊 |
+| `/var/lib/webufw/` | root:root / 0700，待確認操作及輪替紀錄 |
+| `/run/webufw/agent.sock` | root:webufw / 0660，限制本機 Agent RPC |
+| `/etc/systemd/system/webufw.service` | root Agent 啟動一般使用者 web 子程序 |
+
+無互動安裝可選用 `--password-file /root/webufw-password`，檔案需 0600，內容是一行初始密碼；不指定時於網頁首次設定。既有設定與密碼不會因重新安裝而重設。安裝器不下載 ufw-docker 腳本、不另行開放防火牆管理埠，也不啟用 UFW。
+
+網頁提供 HSBearBig fork 與 chaifeng 原版兩種來源。啟動時不帶任何 ufw-docker 腳本或修補檔；使用者選取來源時才下載最新 commit。先核對來源、commit 與 SHA256，再按安裝；更換腳本前會在 WebUFW 資料目錄留下帶時間戳的備份。既有 `/usr/local/bin/ufw-docker` 不會被更動。新下載的腳本可獨立由 `sudo /var/lib/webufw/ufw-docker ...` 使用；WebUFW Docker 規則暫時唯讀。
+
+## UFW 與 Docker 整合
+
+可先使用主機規則功能。新下載的 ufw-docker 來源尚未經 WebUFW 的鎖定、刪除與回復流程驗證，因此網頁 Docker 規則只提供檢視。先前已安裝的舊版已驗證腳本仍可使用既有寫入流程；它需要完成 ufw-docker 的宿主機整合，且執行中的 `DOCKER-USER` 必須跳到 `ufw-user-forward`（IPv6 為 `ufw6-user-forward`）。
+
+在具有主控台或其他復原途徑的維護時段，先確保 SSH／管理網段已允許，再依實際網路設定 ufw-docker。以下命令會改變防火牆，應先閱讀預覽與既有規則：
+
+```bash
+sudo /var/lib/webufw/ufw-docker check --docker-subnets
+sudo /var/lib/webufw/ufw-docker install --docker-subnets
+sudo ufw reload
+```
+
+`--docker-subnets` 會以 Docker 網段產生整合。請檢查信任來源的 RETURN 規則是否符合你的隔離需求；來源 allow 不會自動排除其他信任來源。IPv6 必須同時檢查 after6.rules 與執行中的 ip6tables chains。
+
+多網路容器的發布埠不一定轉送至你選擇的網路。WebUFW 只放行所選網路的目的 IP，不會替 Docker 改路由或自動開放其他網路。可用 `sudo iptables -t nat -S DOCKER` 與 `sudo ip6tables -t nat -S DOCKER` 核對 DNAT 目的，再選擇對應網路；Docker 的 gateway priority 也會影響選擇。預覽會對多網路容器顯示提醒。
+
+## 執行與停止
+
+```bash
+sudo webufw run
+sudo systemctl start webufw  # 已安裝服務但目前未執行時
+sudo systemctl status webufw
+sudo journalctl -u webufw -n 100 --no-pager
+sudo systemctl stop webufw
+```
+
+前景與 systemd 模式不能同時執行。停止時會先處理尚未確認的變更；已確認規則保持原狀。根程序失敗時 systemd 會重新啟動並讀取回復紀錄。網頁子程序失敗會讓根程序結束並由 systemd 重啟整組程序。
+
+## 本機存取
+
+預設監聽 `127.0.0.1:8088`。設定頁只允許更改為本機 loopback 位址與連接埠；儲存後需 `sudo systemctl restart webufw`。不提供區網監聽、HTTPS 或反向代理部署設定。舊設定檔若填寫非 loopback `listen`，需改回本機位址才能啟動；舊的 `public_url` 欄位不再使用。
+
+## 衝突與人工回復
+
+遇到外部 CLI 變更、寫入期間強制終止、或回復指令失敗，WebUFW 不會整份覆蓋設定：
+
+1. 使用主控台／SSH 檢查 `sudo ufw status numbered`、`sudo ufw show added` 與 `/var/lib/webufw/pending.json`。
+2. 依紀錄確認必要規則及順序；只修正本次受影響規則。
+3. 確認當前狀態正確後，停止 WebUFW。
+4. 執行 `sudo webufw resolve --acknowledge-current-state`，將 pending.json 保留為 resolved-時間.json。
+5. 重新啟動 WebUFW。此命令不修改防火牆。
+
+請勿在尚未核對時直接刪除 pending.json。
+
+## 更新
+
+建置新 binary，停止服務，執行新版本 `install` 並重啟。更新不會移除 UFW 規則、既有密碼或所選腳本。先前已安裝的舊版已驗證腳本會保留既有 Docker 寫入能力；切換到新下載的來源後，網頁 Docker 寫入會停用，CLI 仍可使用。
