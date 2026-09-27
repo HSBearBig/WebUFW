@@ -28,7 +28,7 @@ func main() {
 	case "_ufw":
 		err = webufw.LockedUFW(os.Args[2:])
 	case "version":
-		fmt.Println("WebUFW 0.1.0-dev")
+		fmt.Println("WebUFW " + webufw.Version)
 	case "help", "--help", "-h":
 		usage()
 	default:

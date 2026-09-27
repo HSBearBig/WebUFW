@@ -5,7 +5,10 @@
 WebUFW 可以先獨立啟動；UFW 和 Docker 都是功能選項，不是管理介面的啟動條件。WebUFW 不透過容器部署。
 
 ```bash
-sudo ./bin/webufw run
+curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/main/install.sh | bash
+# 第一個 Release 發布前，可先從原始碼建置：
+make build
+sudo ./bin/webufw install
 ```
 
 第一次啟動時，終端機會輸出一次性設定碼。於 `http://127.0.0.1:8088` 設定管理者密碼，接著到「設定 → 環境檢查」查看 UFW、Docker Engine 與 ufw-docker。Ubuntu 主機可自行安裝 `ufw`；不使用 Docker 的主機不需安裝 Docker 或 ufw-docker。服務帳號和 systemd 為選用：
@@ -15,7 +18,7 @@ sudo ./bin/webufw install
 sudo journalctl -u webufw -n 30 --no-pager  # 查看首次設定碼
 ```
 
-`install` 預設啟用並啟動 systemd 服務；重新安裝會重啟服務。若只要複製程式與服務檔，使用 `install --no-start`。直接在前景使用 `run` 時，先停止該程序再執行會啟動 systemd 的 `install`，避免兩者爭用監聽位址。
+GitHub Raw 的 `install.sh` 先向 GitHub Releases API 解析最新正式版，再下載對應架構的 binary 與 `SHA256SUMS`，校驗後透過 sudo 呼叫 Go 程式內的 `install`。腳本只安裝 WebUFW，不偵測或安裝 UFW、Docker、ufw-docker；啟動後於網頁設定頁查看依賴狀態，並按需要選擇 ufw-docker 來源。預設啟用並啟動 systemd 服務；重新安裝會重啟服務。若只要複製程式與服務檔，使用 `./install.sh --no-start`。直接在前景使用 `run` 時，先停止該程序再執行會啟動 systemd 的 `install`，避免兩者爭用監聽位址。
 
 相關路徑（WebUFW 私有的 ufw-docker 與 source.json 只在使用者於網頁確認後建立）：
 
@@ -79,4 +82,4 @@ sudo systemctl stop webufw
 
 ## 更新
 
-建置新 binary，停止服務，執行新版本 `install` 並重啟。更新不會移除 UFW 規則、既有密碼或所選腳本。已驗證 HSBearBig 版本可供 WebUFW 管理 Docker 規則；升級成未知 SHA256 後會先退回唯讀，待重新驗證。
+重新執行最新 Release 的管線安裝指令；安裝器會下載並校驗新 binary，然後重啟服務。更新不會移除 UFW 規則、既有密碼或所選腳本。已驗證 HSBearBig 版本可供 WebUFW 管理 Docker 規則；升級成未知 SHA256 後會先退回唯讀，待重新驗證。

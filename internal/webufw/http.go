@@ -115,7 +115,7 @@ func (w *Web) page(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = t.Execute(rw, nil)
+	_ = t.Execute(rw, map[string]string{"Version": Version})
 }
 func (w *Web) asset(rw http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
