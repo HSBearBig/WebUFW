@@ -226,9 +226,12 @@ func Plan(s Snapshot, c Change) (Preview, error) {
 						return p, errors.New("同一 CLI 識別下包含唯讀規則")
 					}
 					p.Removed = append(p.Removed, r)
+					p.Commands = append(p.Commands, Step{"ufw", deleteArgs(r)})
 				}
 			}
-			p.Commands = append(p.Commands, dockerStep(in, true))
+			if len(p.Removed) == 0 {
+				return p, ErrConflict
+			}
 			p.Dangerous = true
 		} else {
 			rr, e := dockerRules(s, in)
@@ -238,39 +241,47 @@ func Plan(s Snapshot, c Change) (Preview, error) {
 			if c.Kind == "docker.narrow" && source == "any" {
 				return p, errors.New("縮限來源時請指定 IP/CIDR")
 			}
+			// Existing exact rules are already satisfied. Only stale destinations
+			// and broad grants being narrowed need removal under the UFW lock.
+			wanted := map[string]bool{}
+			for _, r := range rr {
+				wanted[r.ID] = true
+			}
 			for _, r := range s.Rules {
 				if !sameDocker(r, in) {
 					continue
 				}
-				remove := dockerSourceText(r) == in.Source || (c.Kind == "docker.narrow" && anyIP(r.Source))
-				if remove {
+				matching := dockerSourceText(r) == in.Source
+				broad := c.Kind == "docker.narrow" && anyIP(r.Source)
+				if matching || broad {
 					if r.ReadOnly {
 						return p, errors.New("同一 CLI 識別下包含唯讀規則")
 					}
-					p.Removed = append(p.Removed, r)
+					if broad || !wanted[r.ID] {
+						p.Removed = append(p.Removed, r)
+						p.Commands = append(p.Commands, Step{"ufw", deleteArgs(r)})
+					}
 				} else {
 					p.Warnings = append(p.Warnings, "保留其他來源放行："+r.Source+" → "+r.Destination)
 				}
 			}
-			if c.Kind == "docker.narrow" {
-				seen := map[string]bool{}
-				for _, r := range p.Removed {
-					if !anyIP(r.Source) {
-						continue
-					}
-					broad := inputFromRule(r)
-					if !seen[broad.Source] {
-						p.Commands = append(p.Commands, dockerStep(broad, true))
-						seen[broad.Source] = true
+			for _, r := range rr {
+				found := false
+				for _, existing := range s.Rules {
+					if existing.ID == r.ID {
+						found = true
+						break
 					}
 				}
-				p.Dangerous = true
+				if !found {
+					p.Added = append(p.Added, r)
+					p.Commands = append(p.Commands, Step{"ufw", ruleArgs(r)})
+				}
 			}
-			p.Added = rr
-			p.Commands = append(p.Commands, dockerStep(in, false))
-			if len(p.Removed) > 0 {
-				p.Dangerous = true
+			if len(p.Commands) == 0 {
+				return p, errors.New("規則已符合目前容器 IP 與來源設定")
 			}
+			p.Dangerous = len(p.Removed) > 0
 		}
 		p.Warnings = append(p.Warnings, "來源放行只新增允許條件；其他 UFW 轉送規則、既有連線及 ufw-docker 信任網段仍可能允許其他來源。")
 		for _, container := range s.Containers {

@@ -80,9 +80,15 @@ func TestDockerPlanning(t *testing.T) {
 	if e != nil || len(p.Removed) != 0 {
 		t.Fatal(p, e)
 	}
+	if len(p.Commands) != 1 || p.Commands[0].Tool != "ufw" || p.Commands[0].Args[0] != "route" {
+		t.Fatal("Docker add must use locked UFW", p.Commands)
+	}
 	p, e = Plan(s, Change{Kind: "docker.narrow", Revision: s.Revision, Docker: in})
 	if e != nil || len(p.Removed) != 1 || !anyIP(p.Removed[0].Source) || !p.Dangerous {
 		t.Fatal(p, e)
+	}
+	if len(p.Commands) != 2 || p.Commands[0].Tool != "ufw" || p.Commands[1].Tool != "ufw" || p.Commands[0].Args[1] != "route" {
+		t.Fatal("Docker narrow must delete broad rule then add scoped rule", p.Commands)
 	}
 	in.Port = "3000"
 	if _, e = dockerRules(s, in); e == nil {

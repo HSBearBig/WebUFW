@@ -52,3 +52,41 @@ func TestSourceSelectionAndPrivateInstall(t *testing.T) {
 		t.Fatal("changed staged bytes accepted")
 	}
 }
+
+func TestDetectExistingSystemScriptAndVerifiedDigests(t *testing.T) {
+	dir := t.TempDir()
+	private := filepath.Join(dir, "private", "ufw-docker")
+	meta := filepath.Join(dir, "private", "source.json")
+	system := filepath.Join(dir, "usr", "local", "bin", "ufw-docker")
+	if err := os.MkdirAll(filepath.Dir(system), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(system, []byte("#!/bin/bash\n# existing user script\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	st, installed, compatible := installedSourcePaths(private, meta, []string{system})
+	if !installed || compatible || st.Path != system || st.ID != "unknown" || st.SHA256 == "" {
+		t.Fatalf("system script not detected: %+v %v %v", st, installed, compatible)
+	}
+	if err := os.MkdirAll(filepath.Dir(private), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(private, []byte("#!/bin/bash\n# private selection\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	st, installed, _ = installedSourcePaths(private, meta, []string{system})
+	if !installed || st.Path != private {
+		t.Fatal("private selection should have precedence", st)
+	}
+	for _, sha := range []string{verifiedHSBearSHA256, verifiedHSBearLocalSHA256} {
+		if !compatibleSource(sourceState{ID: "hsbearbig", SHA256: sha}) {
+			t.Fatal("verified release blocked", sha)
+		}
+		if compatibleSource(sourceState{ID: "chaifeng", SHA256: sha}) {
+			t.Fatal("unverified source accepted", sha)
+		}
+	}
+	if compatibleSource(sourceState{ID: "hsbearbig", SHA256: strings.Repeat("f", 64)}) {
+		t.Fatal("changed release accepted")
+	}
+}

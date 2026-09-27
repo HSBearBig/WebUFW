@@ -17,7 +17,7 @@ sudo journalctl -u webufw -n 30 --no-pager  # 查看首次設定碼
 
 `install` 預設啟用並啟動 systemd 服務；重新安裝會重啟服務。若只要複製程式與服務檔，使用 `install --no-start`。直接在前景使用 `run` 時，先停止該程序再執行會啟動 systemd 的 `install`，避免兩者爭用監聽位址。
 
-相關路徑（ufw-docker 與 source.json 只在使用者於網頁確認後建立）：
+相關路徑（WebUFW 私有的 ufw-docker 與 source.json 只在使用者於網頁確認後建立）：
 
 | 路徑 | 用途 |
 |---|---|
@@ -31,17 +31,17 @@ sudo journalctl -u webufw -n 30 --no-pager  # 查看首次設定碼
 
 無互動安裝可選用 `--password-file /root/webufw-password`，檔案需 0600，內容是一行初始密碼；不指定時於網頁首次設定。既有設定與密碼不會因重新安裝而重設。安裝器不下載 ufw-docker 腳本、不另行開放防火牆管理埠，也不啟用 UFW。
 
-網頁提供 HSBearBig fork 與 chaifeng 原版兩種來源。啟動時不帶任何 ufw-docker 腳本或修補檔；使用者選取來源時才下載最新 commit。先核對來源、commit 與 SHA256，再按安裝；更換腳本前會在 WebUFW 資料目錄留下帶時間戳的備份。既有 `/usr/local/bin/ufw-docker` 不會被更動。新下載的腳本可獨立由 `sudo /var/lib/webufw/ufw-docker ...` 使用；WebUFW Docker 規則暫時唯讀。
+WebUFW 會偵測系統既有的 `/usr/local/bin/ufw-docker` 或 `/usr/bin/ufw-docker`，顯示其路徑與 SHA256，不修改或覆蓋它。也可選擇 HSBearBig fork 與 chaifeng 原版，核對最新 commit 和 SHA256 後安裝到私有資料目錄；更換私有腳本前會備份。私有腳本優先於系統腳本。已驗證 HSBearBig 版本支援 WebUFW Docker 規則寫入；未知版本僅供檢視。
 
 ## UFW 與 Docker 整合
 
-可先使用主機規則功能。新下載的 ufw-docker 來源尚未經 WebUFW 的鎖定、刪除與回復流程驗證，因此網頁 Docker 規則只提供檢視。先前已安裝的舊版已驗證腳本仍可使用既有寫入流程；它需要完成 ufw-docker 的宿主機整合，且執行中的 `DOCKER-USER` 必須跳到 `ufw-user-forward`（IPv6 為 `ufw6-user-forward`）。
+可先使用主機規則功能。Docker 規則寫入還需要已驗證的 ufw-docker 腳本、Docker bridge 網路與 ufw-docker 的宿主機整合；執行中的 `DOCKER-USER` 必須跳到 `ufw-user-forward`（IPv6 為 `ufw6-user-forward`）。WebUFW 在 UFW 鎖下逐條寫入、刪除並回復規則，使用與 HSBearBig CLI 相同的註解格式。
 
 在具有主控台或其他復原途徑的維護時段，先確保 SSH／管理網段已允許，再依實際網路設定 ufw-docker。以下命令會改變防火牆，應先閱讀預覽與既有規則：
 
 ```bash
-sudo /var/lib/webufw/ufw-docker check --docker-subnets
-sudo /var/lib/webufw/ufw-docker install --docker-subnets
+sudo /usr/local/bin/ufw-docker check --docker-subnets
+sudo /usr/local/bin/ufw-docker install --docker-subnets
 sudo ufw reload
 ```
 
@@ -61,9 +61,9 @@ sudo systemctl stop webufw
 
 前景與 systemd 模式不能同時執行。停止時會先處理尚未確認的變更；已確認規則保持原狀。根程序失敗時 systemd 會重新啟動並讀取回復紀錄。網頁子程序失敗會讓根程序結束並由 systemd 重啟整組程序。
 
-## 本機存取
+## 網頁存取
 
-預設監聽 `127.0.0.1:8088`。設定頁只允許更改為本機 loopback 位址與連接埠；儲存後需 `sudo systemctl restart webufw`。不提供區網監聽、HTTPS 或反向代理部署設定。舊設定檔若填寫非 loopback `listen`，需改回本機位址才能啟動；舊的 `public_url` 欄位不再使用。
+預設監聽 `127.0.0.1:8088`。設定頁可改成 `0.0.0.0:8088`、`[::]:8088` 或指定的本機 IP:連接埠；儲存後需 `sudo systemctl restart webufw`。區網使用者以 `http://<主機 IP>:8088` 存取。首次設定碼只能由本機連線提交。區網連線目前為明文 HTTP，請自行限制可連入的網段；HTTPS 尚未提供。
 
 ## 衝突與人工回復
 
@@ -79,4 +79,4 @@ sudo systemctl stop webufw
 
 ## 更新
 
-建置新 binary，停止服務，執行新版本 `install` 並重啟。更新不會移除 UFW 規則、既有密碼或所選腳本。先前已安裝的舊版已驗證腳本會保留既有 Docker 寫入能力；切換到新下載的來源後，網頁 Docker 寫入會停用，CLI 仍可使用。
+建置新 binary，停止服務，執行新版本 `install` 並重啟。更新不會移除 UFW 規則、既有密碼或所選腳本。已驗證 HSBearBig 版本可供 WebUFW 管理 Docker 規則；升級成未知 SHA256 後會先退回唯讀，待重新驗證。

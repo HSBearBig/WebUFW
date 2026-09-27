@@ -18,13 +18,22 @@ import (
 
 const scriptPath = "/var/lib/webufw/ufw-docker"
 const sourcePath = "/var/lib/webufw/source.json"
+const systemScriptPath = "/usr/local/bin/ufw-docker"
+const systemScriptFallback = "/usr/bin/ufw-docker"
 
 // Keep existing installations usable, including pending-change recovery.
-// New downloads are not granted write access until their CLI behavior is tested.
+// Unknown downloads remain read-only until their comment format is reviewed.
 const legacyVerifiedSHA256 = "7422e36db2212423b65580e3586cc34a17256030c388ac667370a09bc1ea085a"
+
+// The HSBearBig release and the locally installed LC_ALL export variant were
+// inspected for the CLI comment format. WebUFW writes through locked UFW, not
+// through the script, so its broad regex-based delete path is never invoked.
+const verifiedHSBearSHA256 = "8089879e50bad72c850b9c4ac16ef58fe4d5df18d314998d65ab836e58b6b1e5"
+const verifiedHSBearLocalSHA256 = "60a47fb76501cc5e848c45127e1517b63448a6fa68a50901b87eaad268f8aeae"
 
 type sourceState struct {
 	ID     string `json:"id"`
+	Path   string `json:"path,omitempty"`
 	Commit string `json:"commit"`
 	SHA256 string `json:"sha256"`
 	URL    string `json:"url"`
@@ -42,27 +51,62 @@ var sourceNames = map[string]string{
 
 func sourceOptions() []map[string]string {
 	return []map[string]string{
-		{"id": "hsbearbig", "name": sourceNames["hsbearbig"], "url": "https://github.com/HSBearBig/ufw-docker", "support": "可獨立使用 CLI；WebUFW Docker 規則暫為唯讀"},
+		{"id": "hsbearbig", "name": sourceNames["hsbearbig"], "url": "https://github.com/HSBearBig/ufw-docker", "support": "已驗證版本可由 WebUFW 管理 Docker 規則；其他版本僅供 CLI 使用"},
 		{"id": "chaifeng", "name": sourceNames["chaifeng"], "url": "https://github.com/chaifeng/ufw-docker", "support": "原版沒有來源 IP 功能；WebUFW 規則寫入唯讀"},
 	}
 }
 
-func installedSource() (sourceState, bool, bool) {
-	return installedSourceAt(scriptPath, sourcePath)
+func compatibleSource(state sourceState) bool {
+	return state.SHA256 == legacyVerifiedSHA256 ||
+		(state.ID == "hsbearbig" && (state.SHA256 == verifiedHSBearSHA256 || state.SHA256 == verifiedHSBearLocalSHA256))
 }
-func installedSourceAt(scriptPath, sourcePath string) (sourceState, bool, bool) {
-	var state sourceState
-	script, err := readBounded(scriptPath)
+
+func identifySource(script []byte, path string) sourceState {
+	hash := digestBytes(script)
+	state := sourceState{ID: "unknown", Path: path, SHA256: hash, Commit: "版本未知"}
+	switch hash {
+	case legacyVerifiedSHA256:
+		state.ID, state.Commit = "legacy-webufw", "既有已驗證版本"
+	case verifiedHSBearSHA256, verifiedHSBearLocalSHA256:
+		state.ID, state.Commit = "hsbearbig", "20ede95187ec8b989a29c6cc79134f960739250d"
+	}
+	return state
+}
+func installedSource() (sourceState, bool, bool) {
+	return installedSourcePaths(scriptPath, sourcePath, []string{systemScriptPath, systemScriptFallback})
+}
+func installedSourceAt(path, metadata string) (sourceState, bool, bool) {
+	return installedSourcePaths(path, metadata, nil)
+}
+func installedSourcePaths(path, metadata string, fallbacks []string) (sourceState, bool, bool) {
+	script, err := readBounded(path)
+	usedFallback := false
+	if os.IsNotExist(err) {
+		for _, candidate := range fallbacks {
+			script, err = readBounded(candidate)
+			if err == nil {
+				path = candidate
+				usedFallback = true
+				break
+			}
+			if !os.IsNotExist(err) {
+				break
+			}
+		}
+	}
 	if err != nil {
-		return state, false, false
+		return sourceState{}, false, false
 	}
-	if digestBytes(script) == legacyVerifiedSHA256 {
-		return sourceState{ID: "legacy-webufw", Commit: "既有已驗證版本", SHA256: digestBytes(script)}, true, true
+	state := identifySource(script, path)
+	if usedFallback {
+		// No private metadata applies to a system-wide installation.
+		return state, true, compatibleSource(state)
 	}
-	if data, err := readBounded(sourcePath); err == nil && json.Unmarshal(data, &state) == nil && state.SHA256 == digestBytes(script) && sourceNames[state.ID] != "" {
-		return state, true, false
+	var saved sourceState
+	if data, e := readBounded(metadata); e == nil && json.Unmarshal(data, &saved) == nil && saved.SHA256 == state.SHA256 && sourceNames[saved.ID] != "" {
+		state.ID, state.Commit, state.URL = saved.ID, saved.Commit, saved.URL
 	}
-	return sourceState{}, true, false
+	return state, true, compatibleSource(state)
 }
 
 var sourceHTTP = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {

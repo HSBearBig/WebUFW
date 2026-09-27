@@ -143,7 +143,7 @@ func (b *RealBackend) ReadSnapshot(ctx context.Context) (Snapshot, error) {
 // Avoid parsing/serializing hundreds of unchanged rules on every browser poll.
 func (b *RealBackend) ReadHint(ctx context.Context) (string, bool, error) {
 	files := map[string]any{}
-	for _, path := range []string{"/etc/ufw/user.rules", "/etc/ufw/user6.rules", "/etc/ufw/ufw.conf", "/etc/default/ufw", "/etc/ufw/before.rules", "/etc/ufw/before6.rules", "/etc/ufw/after.rules", "/etc/ufw/after6.rules", "/etc/docker/daemon.json", scriptPath, sourcePath, "/var/run/docker.sock"} {
+	for _, path := range []string{"/etc/ufw/user.rules", "/etc/ufw/user6.rules", "/etc/ufw/ufw.conf", "/etc/default/ufw", "/etc/ufw/before.rules", "/etc/ufw/before6.rules", "/etc/ufw/after.rules", "/etc/ufw/after6.rules", "/etc/docker/daemon.json", scriptPath, sourcePath, systemScriptPath, systemScriptFallback, "/var/run/docker.sock"} {
 		info, err := os.Stat(path)
 		if err != nil {
 			files[path] = err.Error()
@@ -229,10 +229,11 @@ func (b *RealBackend) snapshot(ctx context.Context, allowCachedRuntime bool) (Sn
 			s.Environment.Warnings = append(s.Environment.Warnings, "整合預設信任："+strings.TrimSpace(strings.Split(line, " -s ")[1]))
 		}
 	}
-	script, _ := readBounded(scriptPath)
 	source, installed, compatible := installedSource()
+	script, _ := readBounded(source.Path)
 	s.Environment.ScriptInstalled = installed
 	s.Environment.ScriptSource = source.ID
+	s.Environment.ScriptPath = source.Path
 	containers, writable, warnings := inspectDocker(ctx)
 	s.Containers = containers
 	s.Environment.Docker = containers != nil
@@ -242,13 +243,13 @@ func (b *RealBackend) snapshot(ctx context.Context, allowCachedRuntime bool) (Sn
 			s.Environment.Warnings = append(s.Environment.Warnings, "尚未設定 DOCKER-USER 整合；請在維護時段依部署文件設定。")
 		}
 		if !installed {
-			s.Environment.Warnings = append(s.Environment.Warnings, "尚未選擇 ufw-docker 腳本；若不使用 Docker，可略過。")
+			s.Environment.Warnings = append(s.Environment.Warnings, "尚未偵測到 ufw-docker 腳本；若不使用 Docker，可略過。")
 		}
 		if installed && !compatible {
-			s.Environment.Warnings = append(s.Environment.Warnings, "目前來源尚未經 WebUFW 寫入相容驗證，Docker 規則僅供檢視；仍可獨立使用該腳本。")
+			s.Environment.Warnings = append(s.Environment.Warnings, "已偵測到 ufw-docker，但此版本尚未驗證相容性，Docker 規則僅供檢視。")
 		}
 	}
-	s.Environment.DockerWritable = s.Environment.Docker && writable && compatible && s.Environment.Integration
+	s.Environment.DockerWritable = s.Environment.UFW && s.Environment.Docker && writable && compatible && s.Environment.Integration
 	// Rule files and Docker containers are always read fresh. Expensive kernel
 	// consistency checks can be reused briefly for display only; previews,
 	// writes, confirmation and recovery always verify the kernel again.

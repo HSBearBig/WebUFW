@@ -24,8 +24,8 @@ type Config struct {
 
 func (c Config) Validate() error {
 	host, port, e := net.SplitHostPort(c.Listen)
-	if e != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		return errors.New("目前只允許本機 loopback 監聽位址")
+	if e != nil || net.ParseIP(host) == nil {
+		return errors.New("監聽位址需為 IP:連接埠，例如 0.0.0.0:8088")
 	}
 	if e = validatePort(port, false); e != nil {
 		return e
@@ -171,7 +171,11 @@ func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (an
 		return map[string]any{"listen": s.config.Listen, "username": "admin", "auth_version": s.authVersion}, nil
 	case "sources":
 		st, installed, compatible := installedSource()
-		return map[string]any{"options": sourceOptions(), "installed": installed, "source": st, "compatible": compatible, "path": scriptPath}, nil
+		path := st.Path
+		if path == "" {
+			path = scriptPath
+		}
+		return map[string]any{"options": sourceOptions(), "installed": installed, "source": st, "compatible": compatible, "path": path}, nil
 	case "source.prepare":
 		var in struct {
 			ID string `json:"id"`
@@ -186,7 +190,7 @@ func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (an
 		s.mu.Lock()
 		s.sourceStage = stage
 		s.mu.Unlock()
-		return map[string]any{"id": stage.ID, "commit": stage.Commit, "sha256": stage.SHA256, "url": stage.URL, "size": len(stage.Bytes), "compatible": false}, nil
+		return map[string]any{"id": stage.ID, "commit": stage.Commit, "sha256": stage.SHA256, "url": stage.URL, "size": len(stage.Bytes), "compatible": compatibleSource(stage.sourceState)}, nil
 	case "source.install":
 		var in struct {
 			ID     string `json:"id"`

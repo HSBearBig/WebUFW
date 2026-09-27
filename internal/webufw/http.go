@@ -50,14 +50,25 @@ func (w *Web) origin(r *http.Request) string {
 	return "http://" + r.Host
 }
 func (w *Web) allowedHost(host string) bool {
-	if host == w.config.Listen {
+	listenHost, listenPort, err := net.SplitHostPort(w.config.Listen)
+	if err != nil {
+		return false
+	}
+	requestHost, requestPort, err := net.SplitHostPort(host)
+	if err != nil || requestPort != listenPort {
+		return false
+	}
+	listenIP := net.ParseIP(listenHost)
+	if listenIP == nil {
+		return false
+	}
+	if listenIP.IsUnspecified() {
+		return requestHost == "localhost" || net.ParseIP(requestHost) != nil
+	}
+	if requestHost == listenHost {
 		return true
 	}
-	h, p, e := net.SplitHostPort(w.config.Listen)
-	if e == nil && net.ParseIP(h).IsLoopback() && (host == net.JoinHostPort("localhost", p) || host == net.JoinHostPort("127.0.0.1", p)) {
-		return true
-	}
-	return false
+	return listenIP.IsLoopback() && requestHost == "localhost"
 }
 func (w *Web) security(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -150,9 +161,9 @@ func (w *Web) setupStatus(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, 200, v)
 }
 func (w *Web) setupComplete(rw http.ResponseWriter, r *http.Request) {
-	host, _, _ := net.SplitHostPort(w.config.Listen)
-	if net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		writeError(rw, 403, errors.New("首次設定只允許本機監聽"))
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		writeError(rw, 403, errors.New("首次設定只允許本機連線"))
 		return
 	}
 	b, e := io.ReadAll(r.Body)

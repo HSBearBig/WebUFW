@@ -65,6 +65,7 @@ type Environment struct {
 	DockerWritable  bool     `json:"docker_writable"`
 	ScriptInstalled bool     `json:"script_installed"`
 	ScriptSource    string   `json:"script_source,omitempty"`
+	ScriptPath      string   `json:"script_path,omitempty"`
 	Warnings        []string `json:"warnings"`
 	Listen          string   `json:"listen"`
 }

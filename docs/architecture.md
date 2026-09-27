@@ -6,7 +6,7 @@
 
 Agent 的 Unix socket 以檔案權限及 SO_PEERCRED 檢查來源，僅接受 webufw UID 或 root。內部 RPC 只接受固定操作名稱；沒有命令字串或任意 shell 端點。設定、認證與日誌操作亦透過 Agent。
 
-Docker 狀態由 root Agent 透過本機 `/var/run/docker.sock` 讀取固定的 `/info`、`/containers/json?all=1` 與 `/networks` API，使用 Go 標準 HTTP client、5 秒逾時與 2 MiB 回應上限。HTTP 程序沒有 Docker socket，亦沒有一般用途的 Docker API 代理。規則寫入只使用使用者在網頁確認安裝的 WebUFW 已驗證腳本。
+Docker 狀態由 root Agent 透過本機 `/var/run/docker.sock` 讀取固定的 `/info`、`/containers/json?all=1` 與 `/networks` API，使用 Go 標準 HTTP client、5 秒逾時與 2 MiB 回應上限。HTTP 程序沒有 Docker socket，亦沒有一般用途的 Docker API 代理。Docker 規則寫入使用受 UFW 鎖保護的原生 UFW 命令，規則註解保持與 HSBearBig CLI 相容；腳本用於偵測來源及 CLI 操作。
 
 網頁與 Agent 的分離縮小 HTTP 程序可直接存取的範圍；若網頁程序遭控制，攻擊者仍可能呼叫 Agent 已允許的管理操作。這不是防禦已控制管理員或 root 的安全邊界。
 
@@ -14,7 +14,7 @@ Docker 狀態由 root Agent 透過本機 `/var/run/docker.sock` 讀取固定的 
 
 Agent 讀取 UFW 的 user.rules/user6.rules `### tuple ###` metadata，保留完整註解。複雜 tuple、應用 profile、來源埠、介面與不一致 Docker 註解均唯讀。模型使用完整內容雜湊識別，不將畫面列號當作刪除主鍵。
 
-實際主機寫入使用參數陣列執行 UFW。WebUFW 不內嵌 ufw-docker 腳本或修補檔；設定頁可選擇 HSBearBig 或 chaifeng 的最新 commit，下載後先核對 SHA256 才安裝到 `/var/lib/webufw/ufw-docker`，不覆蓋 `/usr/local/bin/ufw-docker`。新下載的來源未經 WebUFW 寫入相容驗證，只供獨立 CLI 使用，網頁 Docker 規則唯讀。為保護既有安裝與待確認變更回復，舊版已驗證腳本仍以既有 SHA256 辨識並可執行原寫入流程。資料庫中不另存一套規則；pending.json 僅存短期操作日誌及回復所需內容。
+實際主機寫入使用參數陣列執行 UFW。WebUFW 不內嵌 ufw-docker 腳本或修補檔；優先偵測私有目錄，其次偵測 `/usr/local/bin/ufw-docker` 與 `/usr/bin/ufw-docker`。來源頁可選 HSBearBig 或 chaifeng 的最新 commit，核對 SHA256 後安裝至私有目錄，不覆蓋系統腳本。已驗證的 HSBearBig SHA256 可進行 Docker 規則寫入；未知版本保留唯讀。Docker 寫入使用 UFW 鎖與單條規則的完整內容，避免以腳本的註解正則式刪除其他來源或容器。資料庫中不另存規則；pending.json 僅存短期操作日誌及回復所需內容。
 
 ## CLI 同步與鎖定
 
@@ -38,7 +38,7 @@ UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完�
 
 | 方法與路徑 | 功能 |
 |---|---|
-| GET、POST `/setup` | 首次設定狀態；以終端機一次性設定碼建立密碼（只允許本機監聽） |
+| GET、POST `/setup` | 首次設定狀態；以終端機一次性設定碼建立密碼（提交只允許本機連線） |
 | POST `/login` | username/password 登入，回傳 csrf |
 | GET `/session` | 取得目前工作階段的 csrf |
 | POST `/logout` | 結束工作階段 |
@@ -51,7 +51,7 @@ UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完�
 | GET `/settings` | 本機監聽位址與管理者名稱，不含密碼雜湊 |
 | GET `/sources` | 可選來源、已安裝版本及相容狀態 |
 | POST `/source.prepare`、`/source.install` | 選來源與預覽固定版本；核對 SHA256 後安裝到私有資料目錄 |
-| POST `/settings.update` | 僅限本機 loopback 的 listen；重啟生效 |
+| POST `/settings.update` | IP:連接埠監聽位址；重啟生效 |
 | POST `/password` | current/password；使所有工作階段失效 |
 
 Change.kind 為 `host.add`、`host.edit`、`host.delete`、`ufw.toggle`、`docker.add`、`docker.narrow`、`docker.delete` 或 `docker.sync`。

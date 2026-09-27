@@ -108,14 +108,48 @@ func TestFirstRunSetupInBrowser(t *testing.T) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 }
-func TestOnlyLoopbackListenAllowed(t *testing.T) {
-	for _, listen := range []string{"0.0.0.0:8088", "192.168.1.10:8088", "[::]:8088"} {
-		if err := (Config{Listen: listen}).Validate(); err == nil {
-			t.Fatalf("nonlocal listen accepted: %s", listen)
+func TestIPListenAndWildcardHostValidation(t *testing.T) {
+	for _, listen := range []string{"127.0.0.1:8088", "0.0.0.0:8088", "192.168.1.10:8088", "[::]:8088"} {
+		if err := (Config{Listen: listen}).Validate(); err != nil {
+			t.Fatalf("%s: %v", listen, err)
 		}
 	}
-	if err := (Config{Listen: "127.0.0.1:8088"}).Validate(); err != nil {
-		t.Fatal(err)
+	for _, listen := range []string{"localhost:8088", "0.0.0.0:0", "0.0.0.0:65536", ":8088"} {
+		if err := (Config{Listen: listen}).Validate(); err == nil {
+			t.Fatalf("invalid listen accepted: %s", listen)
+		}
+	}
+	w := newTestWeb(t)
+	w.config.Listen = "0.0.0.0:8088"
+	for _, host := range []string{"127.0.0.1:8088", "192.168.1.10:8088", "localhost:8088", "[::1]:8088"} {
+		if r := request(w, "GET", "/", "", nil, "", "", host); r.Code != 200 {
+			t.Fatalf("%s: %d", host, r.Code)
+		}
+	}
+	for _, host := range []string{"evil.example:8088", "192.168.1.10:9999"} {
+		if r := request(w, "GET", "/", "", nil, "", "", host); r.Code != 403 {
+			t.Fatalf("%s: %d", host, r.Code)
+		}
+	}
+	if r := request(w, "POST", "/api/v1/login", `{}`, nil, "", "http://evil.example:8088", "192.168.1.10:8088"); r.Code != 403 {
+		t.Fatal("cross-origin login accepted", r.Code)
+	}
+}
+func TestWildcardSetupRequiresLocalClient(t *testing.T) {
+	m, _ := NewManager(newTestBackend(), "")
+	c := Config{Listen: "0.0.0.0:8088"}
+	service := NewService(m, c, t.TempDir()+"/config.json")
+	service.bootstrapCode = "setup-code-123"
+	w := NewWeb(service, c)
+	r := httptest.NewRequest("POST", "http://192.168.1.10:8088/api/v1/setup", strings.NewReader(`{"code":"setup-code-123","password":"long-password-123"}`))
+	r.Host = "192.168.1.10:8088"
+	r.RemoteAddr = "192.168.1.20:9000"
+	r.Header.Set("Origin", "http://192.168.1.10:8088")
+	r.Header.Set("Content-Type", "application/json")
+	out := httptest.NewRecorder()
+	w.ServeHTTP(out, r)
+	if out.Code != 403 {
+		t.Fatal("remote bootstrap accepted", out.Code)
 	}
 }
 func TestOptionalSourcesVisibleWithoutInstall(t *testing.T) {
