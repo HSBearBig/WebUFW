@@ -6,7 +6,7 @@ WebUFW 可以先獨立啟動；UFW 和 Docker 都是功能選項，不是管理�
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/main/install.sh | bash
-# 第一個 Release 發布前，可先從原始碼建置：
+# 如需從原始碼建置開發版：
 make build
 sudo ./bin/webufw install
 ```

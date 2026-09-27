@@ -26,10 +26,10 @@ curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/main/install.sh | 
 從 GitHub Raw 取得的安裝腳本會透過 GitHub Releases API 取得最新正式版的 tag，依 CPU 架構下載對應的 `webufw-linux-amd64` 或 `webufw-linux-arm64`，比對同一版本的 `SHA256SUMS` 後呼叫 sudo 安裝。腳本雖從 `main` 取得，但執行檔只從正式 Release 下載，不會在安裝主機上建置，也不要求使用者安裝 Go。指定版本時可同時固定安裝腳本和執行檔：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/v0.1.0/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/v0.0.1/install.sh | bash -s -- --version v0.0.1
 ```
 
-可在管線後加 `bash -s -- --dry-run` 預覽，或加 `--no-start` 只安裝檔案而不啟動服務。安裝器只負責 WebUFW；UFW、Docker 與 ufw-docker 的狀態在網頁設定頁顯示，ufw-docker 來源也在該頁選擇。**目前 GitHub 尚未發布 Release，所以上述管線會在第一版發布後才可使用。**手動建置開發版仍可使用：
+可在管線後加 `bash -s -- --dry-run` 預覽，或加 `--no-start` 只安裝檔案而不啟動服務。安裝器只負責 WebUFW；UFW、Docker 與 ufw-docker 的狀態在網頁設定頁顯示，ufw-docker 來源也在該頁選擇。手動建置開發版仍可使用：
 
 ```bash
 make build
