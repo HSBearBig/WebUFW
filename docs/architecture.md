@@ -2,7 +2,7 @@
 
 ## 程序與權限
 
-`webufw run` 是 root Agent，啟動同一 binary 的 `_web` 子程序並指定非 root UID/GID，清空補充群組。未執行選用的 systemd 安裝時使用系統 `nobody`，安裝後使用 `webufw`。網頁程序沒有 UFW、Docker socket 或設定檔的直接存取權。缺少 UFW、Docker 或 ufw-docker 時，管理介面仍可啟動，首次密碼透過本機頁面與終端機一次性設定碼建立。
+systemd 直接啟動 `/usr/local/libexec/webufw/webufw` 作為 root Agent；同一 binary 以私有的程序角色環境變數啟動 web 子程序，指定非 root UID/GID 並清空補充群組。服務帳號由安裝腳本建立。網頁程序沒有 UFW、Docker socket 或設定檔的直接存取權。缺少 UFW、Docker 或 ufw-docker 時，管理介面仍可啟動。首次啟動產生管理者初始密碼，bcrypt 雜湊寫入設定檔，明文初始密碼寫入服務 journal；安裝器等到 HTTP socket 監聽成功後顯示當次啟動日誌。重新啟動沿用設定與密碼。
 
 Agent 的 Unix socket 以檔案權限及 SO_PEERCRED 檢查來源，僅接受 webufw UID 或 root。內部 RPC 只接受固定操作名稱；沒有命令字串或任意 shell 端點。設定、認證與日誌操作亦透過 Agent。
 
@@ -18,7 +18,7 @@ Agent 讀取 UFW 的 user.rules/user6.rules `### tuple ###` metadata，保留完
 
 ## CLI 同步與鎖定
 
-UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完成版本核對、指令序列及操作結果記錄。根程序持鎖；受限 `_ufw` helper 驗證繼承的檔案描述符及鎖持有 PID，才以已安裝的 UFW/Python entrypoint 執行命令，避免重複取得父程序的鎖。
+UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完成版本核對、指令序列及操作結果記錄。根程序持鎖；受限 UFW 子程序 驗證繼承的檔案描述符及鎖持有 PID，才以已安裝的 UFW/Python entrypoint 執行命令，避免重複取得父程序的鎖。
 
 這個相容層針對 Ubuntu 24.04 UFW 0.36.2；升級 UFW 時需重新執行 VM 測試。遵守原生 UFW 鎖的 CLI 寫入會序列化。直接編輯檔案、原始 iptables 命令及 Docker 本身不受這把鎖約束，故另外比對前後狀態。
 
@@ -38,7 +38,6 @@ UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完�
 
 | 方法與路徑 | 功能 |
 |---|---|
-| GET、POST `/setup` | 首次設定狀態；以終端機一次性設定碼建立密碼（提交只允許本機連線） |
 | POST `/login` | username/password 登入，回傳 csrf |
 | GET `/session` | 取得目前工作階段的 csrf |
 | POST `/logout` | 結束工作階段 |
@@ -48,7 +47,7 @@ UFW 使用 `/run/ufw.lock` 的 POSIX record lock。Agent 在同一把鎖內完�
 | POST `/apply` | `{ "id": "preview-id" }` |
 | POST `/confirm`、`/rollback` | `{ "id": "pending-id" }` |
 | GET `/logs` | 最近 100 筆 firewall / audit |
-| GET `/settings` | 本機監聽位址與管理者名稱，不含密碼雜湊 |
+| GET `/settings` | 儲存位址 listen、生效位址 active_listen、restart_required 與管理者名稱，不含密碼雜湊 |
 | GET `/sources` | 可選來源、已安裝版本及相容狀態 |
 | POST `/source.prepare`、`/source.install` | 選來源與預覽固定版本；核對 SHA256 後安裝到私有資料目錄 |
 | POST `/settings.update` | IP:連接埠監聽位址；重啟生效 |

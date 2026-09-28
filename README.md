@@ -23,22 +23,24 @@ go vet ./...
 curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/main/install.sh | bash
 ```
 
-從 GitHub Raw 取得的安裝腳本會透過 GitHub Releases API 取得最新正式版的 tag，依 CPU 架構下載對應的 `webufw-linux-amd64` 或 `webufw-linux-arm64`，比對同一版本的 `SHA256SUMS` 後呼叫 sudo 安裝。腳本雖從 `main` 取得，但執行檔只從正式 Release 下載，不會在安裝主機上建置，也不要求使用者安裝 Go。指定版本時可同時固定安裝腳本和執行檔：
+從 GitHub Raw 取得的安裝腳本會透過 GitHub Releases API 取得最新正式版的 tag，依 CPU 架構下載對應的 `webufw-linux-amd64` 或 `webufw-linux-arm64`，比對同一版本的 `SHA256SUMS` 後呼叫 sudo 安裝。腳本雖從 `main` 取得，但執行檔只從正式 Release 下載，不會在安裝主機上建置，也不要求使用者安裝 Go。指定版本時可同時固定安裝腳本和執行檔（將 `vX.Y.Z` 換成已發布的版本）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/v0.0.1/install.sh | bash -s -- --version v0.0.1
+curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/vX.Y.Z/install.sh | bash -s -- --version vX.Y.Z
 ```
 
-可在管線後加 `bash -s -- --dry-run` 預覽，或加 `--no-start` 只安裝檔案而不啟動服務。安裝器只負責 WebUFW；UFW、Docker 與 ufw-docker 的狀態在網頁設定頁顯示，ufw-docker 來源也在該頁選擇。手動建置開發版仍可使用：
+可在管線後加 `bash -s -- --dry-run` 預覽，或加 `--no-start` 只安裝檔案。安裝器會建立服務帳號、安裝至 `/usr/local/libexec/webufw/webufw`，並啟用、啟動 systemd 服務。系統不提供 `webufw` 指令，服務統一透過 `systemctl` 管理；升級會移除舊版 `/usr/local/bin/webufw`。
+
+首次啟動會自動產生 `admin` 的初始密碼，儲存 bcrypt 雜湊並寫入服務日誌。安裝腳本等到 HTTP 監聽成功後顯示初始密碼；開啟 `http://127.0.0.1:8088` 即可登入，之後可在設定頁修改密碼。關閉安裝終端機後，可查閱：
 
 ```bash
-make build
-sudo ./bin/webufw run       # 前景測試
-sudo ./bin/webufw install   # 安裝並啟動背景服務
+sudo systemctl status webufw --no-pager -l
+sudo journalctl -u webufw --no-pager --grep='WebUFW 初始密碼'
 ```
+
+`status` 僅顯示最近的日誌；若初始密碼已不在最近紀錄中，請用 `journalctl` 查閱。密碼只在首次產生時記錄，重啟與重新安裝不會重設密碼。安裝器不會安裝 UFW、Docker 或 ufw-docker；登入後在「設定 → 環境檢查」查看缺項，不使用 Docker 可以略過 Docker 與 ufw-docker。
 
 推送版本 tag 後的自動發版流程、本機打包方式與檢查項目見 [發版說明](docs/releasing.md)。
-首次 `run` 會在終端機輸出一次性設定碼；開啟 `http://127.0.0.1:8088` 建立管理者密碼。網頁「設定 → 環境檢查」會顯示 UFW、Docker 與 ufw-docker 缺項。不使用 Docker 可以略過 Docker 與 ufw-docker。`install` 預設安裝、啟用並啟動 WebUFW 的 systemd 服務；重新安裝會重啟服務。若只想先安裝檔案，使用 `install --no-start`。兩種安裝方式都不會安裝 UFW、Docker 或 ufw-docker；若尚未建立密碼，首次啟動的設定碼可用 `sudo journalctl -u webufw -n 30 --no-pager` 查看。
 
 WebUFW 會先偵測 `/usr/local/bin/ufw-docker` 或 `/usr/bin/ufw-docker`；設定頁顯示實際路徑、來源、版本與 SHA256，不覆蓋既有腳本。也可在網頁選擇 HSBearBig fork 或 chaifeng 原版，預覽最新 commit 與 SHA256 後安裝到 `/var/lib/webufw/ufw-docker`。已驗證的 HSBearBig 版本可管理 Docker 規則；WebUFW 透過受鎖保護的 UFW 指令寫入相同註解格式，不執行腳本的廣泛刪除命令。未驗證的版本保留唯讀。
 
@@ -67,4 +69,4 @@ WebUFW 會先偵測 `/usr/local/bin/ufw-docker` 或 `/usr/bin/ufw-docker`；設�
 - [部署與回復](docs/deployment.md)
 - [架構與 API](docs/architecture.md)
 - [驗證結果](docs/validation.md)
-預設只監聽本機；可在設定中改為 `0.0.0.0:8088` 或指定的本機 IP:連接埠，重啟後以 `http://<主機 IP>:8088` 存取。區網連線目前是 HTTP，請自行限制可連入的網段；HTTPS 尚未提供。本專案採 GPL-3.0；下載的 ufw-docker 腳本保留其原始授權與來源。
+預設只監聽本機；可在設定中改為 `0.0.0.0:8088` 或指定的本機 IP:連接埠，執行 `sudo systemctl restart webufw` 後以 `http://<主機 IP>:8088` 存取。設定頁會分別顯示儲存位址與目前生效位址。修改監聽位址不會自動開放 UFW 或上游防火牆，連線檢查步驟見部署文件。區網連線目前是 HTTP，請自行限制可連入的網段；HTTPS 尚未提供。本專案採 GPL-3.0；下載的 ufw-docker 腳本保留其原始授權與來源。

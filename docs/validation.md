@@ -13,7 +13,7 @@
 
 ## 自動化與介面
 
-舊版執行 `go test -race ./...` 的 18 個 Go 測試、`go vet ./...`、9 個 Bash 腳本回歸案例與 Bash 語法檢查均通過。當前版本通過 Go race 測試、vet 與 JavaScript 語法檢查；新增測試涵蓋首次網頁設定、來源選項、明確安裝、備份、內容變更拒絕與未驗證來源唯讀。舊版腳本回歸結果是歷史紀錄，目前程式不攜帶也不修補該腳本。新流程的真實封包、區網 HTTP 啟動與 VM 整合仍待驗證。
+舊版執行 `go test -race ./...` 的 18 個 Go 測試、`go vet ./...`、9 個 Bash 腳本回歸案例與 Bash 語法檢查均通過。來源選擇版本曾通過 Go race 測試、vet 與 JavaScript 語法檢查；當時新增測試涵蓋首次網頁設定、來源選項、明確安裝、備份、內容變更拒絕與未驗證來源唯讀。舊版腳本回歸結果是歷史紀錄，目前程式不攜帶也不修補該腳本。來源選擇流程的防火牆真實封包與 VM 整合仍待驗證。
 
 Go 測試包含規則解析、唯讀保留、IP/埠驗證、雙棧配對、完整內容識別、來源縮限、容器同步、版本衝突、部分指令失敗、逾時與重啟回復、in-flight 衝突、登入限速、工作階段、CSRF、Origin/Host 檢查及密碼變更後失效，以及登入／改密碼並行時的工作階段失效。另驗證 Docker API 欄位映射、不支援環境保留唯讀，以及顯示快取無法授權過期寫入。
 
@@ -41,7 +41,7 @@ Go 測試包含規則解析、唯讀保留、IP/埠驗證、雙棧配對、完�
 
 另外以真實瀏覽器登入 VM，在 200 條規則與 20 個既有容器下，CLI 新增後主機規則摘要自動從 195 更新為 196，沒有手動重新整理；測試後已刪除該條規則。另確認完整 VM 重新開機後，啟用的 systemd 服務會自動啟動 root Agent 與一般使用者 web。這是功能檢查；UI 工具的採樣間隔無法精確量出首次繪製時間。瀏覽器原始紀錄存於上述封存。
 
-VM 測試先修正了 UFW 最後一條同 IP 版本規則的回復位置，以及 systemd 清除 RuntimeDirectory 後的 resolve 路徑處理。多網路測試也明確固定發布埠使用的 gateway，避免把不同 DNAT 目的誤當作規則失效。
+VM 測試先修正了 UFW 最後一條同 IP 版本規則的回復位置，以及 systemd 清除 RuntimeDirectory 後的衝突封存路徑處理。多網路測試也明確固定發布埠使用的 gateway，避免把不同 DNAT 目的誤當作規則失效。
 
 ## 資源與更新速度
 
@@ -73,7 +73,7 @@ VM 專用程式已從正式專案移出，保留在交付檔案 `WebUFW-VM-valid
 1. 準備 hostname 為 `webufw-test` 的 Ubuntu 24.04 VM，安裝 UFW 與一般 Docker Engine。VM 使用者為 `ubuntu`。
 2. 從獨立封存取得 `tests/fixtures/echo` 與 `tests/vm_*`。建置 `cmd/webufw` 與 echo；將靜態 echo binary 命名為 `server`、打包為 `test-image.tar`。
 3. 將 WebUFW binary、tar 與封存中的 VM 測試程式放到 VM 的 `/home/ubuntu/`。
-4. 在 VM 建立 0600 的 `/home/ubuntu/webufw-password`，安裝 WebUFW；建立上述就緒標記。
+4. 此封存使用舊版安裝與密碼流程，請搭配對應歷史版本重現；新版以服務日誌中的初始密碼登入。建立上述就緒標記。
 5. 依序在 VM 執行：
 
 ```bash
@@ -96,3 +96,14 @@ sudo env WEBUFW_DISPOSABLE_VM=1 python3 /home/ubuntu/vm_resources.py --measure-o
 CLI 同步在功能上以即時重新讀取 UFW 驗證；頁面更新檢查間隔為 3 秒。TCG 模擬的指令與狀態查詢延遲不代表原生機器，**5 秒內反映的端到端時間目標仍需在原生硬體驗證**。CPU 數值也只代表此 VM 環境。
 
 尚未驗證其他 Linux 發行版、其他 UFW 版本或長時間負載。Swarm、rootless、Docker Desktop、Docker 原生 nftables 及特殊 bridge gateway 模式的寫入被拒絕。in-flight 崩潰或外部 CLI 衝突會保留日誌並要求人工核對；不宣稱能自動復原所有情況。
+
+## 2026-09-28：服務安裝與初始密碼
+
+移除使用者可用的 WebUFW 子指令與首次設定碼流程。安裝腳本直接部署 systemd 服務，首次啟動產生隨機密碼並記錄在 journal，升級沿用既有設定。
+
+- 安裝器測試在暫存目錄中使用模擬下載、systemctl、journalctl 與服務帳號，實際執行安裝檔案流程；涵蓋 curl 管線輸入、SHA256 拒絕、舊入口移除、設定與 pending 紀錄保留、初始密碼顯示、升級與啟動失敗。真實主機沒有重新安裝或修改防火牆。
+- Go 測試涵蓋初始密碼登入、0600 設定檔與只儲存雜湊、重啟及修改密碼後的持續有效性、無效設定不覆寫，以及監聽設定與生效位址的區分。
+- 真實 TCP 測試以 `0.0.0.0` 綁定暫用埠，從本機的非 loopback IPv4 位址讀取頁面並登入。這驗證程式的 socket 與 HTTP 路徑，不代表另一台電腦穿越防火牆的連線已驗證。
+- `go test -race ./...`、`go vet ./...`、Bash / JavaScript 語法檢查通過，Linux amd64 / arm64 發布檔成功建置。
+
+另唯讀檢查目前主機的既有服務：監聽所有介面的 8088，本機請求 loopback 與主機區網 IP 均回 HTTP 200。UFW 規則查詢需要 sudo 密碼，尚未確認跨機器連線被阻擋的位置。新版完整的 root Agent / systemd 安裝生命週期仍需在可丟棄 VM 中驗證。
