@@ -29,6 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/main/install.sh | 
 curl -fsSL https://raw.githubusercontent.com/HSBearBig/WebUFW/vX.Y.Z/install.sh | bash -s -- --version vX.Y.Z
 ```
 
+執行檔下載會顯示進度條，不設總下載時限；連線逾時為 15 秒，傳輸速率連續 60 秒低於 1 byte/s 時中止。逾時與暫時性 HTTP 錯誤最多自動重試 3 次，完成後仍會驗證 SHA256。若要用修正後的安裝器下載舊版本，可使用 `main/install.sh` 並指定 `--version v0.0.2`。
+
 可在管線後加 `bash -s -- --dry-run` 預覽，或加 `--no-start` 只安裝檔案。安裝器會建立服務帳號、安裝至 `/usr/local/libexec/webufw/webufw`，並啟用、啟動 systemd 服務。系統不提供 `webufw` 指令，服務統一透過 `systemctl` 管理；升級會移除舊版 `/usr/local/bin/webufw`。
 
 首次啟動會自動產生 `admin` 的初始密碼，儲存 bcrypt 雜湊並寫入服務日誌。安裝腳本等到 HTTP 監聽成功後顯示初始密碼；開啟 `http://127.0.0.1:8088` 即可登入，之後可在設定頁修改密碼。關閉安裝終端機後，可查閱：

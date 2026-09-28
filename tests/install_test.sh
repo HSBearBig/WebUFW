@@ -26,26 +26,54 @@ cat > "$test_dir/curl" <<'MOCK_CURL'
 set -euo pipefail
 url=''
 output=''
+max_time=''
+retry=''
+connect_timeout=''
+speed_limit=''
+speed_time=''
+progress=false
+silent=false
 while (($#)); do
     case "$1" in
         -o) output="$2"; shift ;;
+        --max-time) max_time="$2"; shift ;;
+        --retry) retry="$2"; shift ;;
+        --connect-timeout) connect_timeout="$2"; shift ;;
+        --speed-limit) speed_limit="$2"; shift ;;
+        --speed-time) speed_time="$2"; shift ;;
+        --progress-bar) progress=true ;;
+        --silent) silent=true ;;
         https://*) url="$1" ;;
     esac
     shift
 done
+[[ "$retry" == 3 && "$connect_timeout" == 15 ]]
 printf '%s\n' "$url" >> "$WEBUFW_TEST_DIR/curl-urls"
 case "$url" in
     */releases/latest)
-        [[ "${WEBUFW_NO_RELEASE:-}" != 1 ]] || exit 22
+        [[ "$max_time" == 120 && "$silent" == true ]]
+        if [[ "${WEBUFW_NO_RELEASE:-}" == 1 ]]; then printf '404'; exit 22; fi
         printf '{\n  "tag_name": "v0.1.0"\n}\n' > "$output"
         ;;
     */SHA256SUMS)
+        [[ "$max_time" == 120 && "$silent" == true ]]
         cp "$WEBUFW_TEST_DIR/SHA256SUMS" "$output"
         if [[ "${WEBUFW_BAD_SHA:-}" == 1 ]]; then sed -i 's/^[0-9a-f]*/0000000000000000000000000000000000000000000000000000000000000000/' "$output"; fi
         ;;
-    */webufw-linux-*) cp "$WEBUFW_TEST_DIR/$(basename "$url")" "$output" ;;
+    */webufw-linux-*)
+        [[ "$max_time" == 0 && "$progress" == true && "$silent" == false ]]
+        [[ "$speed_limit" == 1 && "$speed_time" == 60 ]]
+        if [[ -n "${WEBUFW_DOWNLOAD_ERROR:-}" ]]; then
+            printf 'partial download' > "$output"
+            printf '%s' "${WEBUFW_HTTP_STATUS:-000}"
+            exit "$WEBUFW_DOWNLOAD_ERROR"
+        fi
+        cp "$WEBUFW_TEST_DIR/$(basename "$url")" "$output"
+        printf '######## 100.0%%\n' >&2
+        ;;
     *) exit 22 ;;
 esac
+printf '200'
 MOCK_CURL
 cat > "$test_dir/sudo" <<'MOCK_SUDO'
 #!/usr/bin/env bash
@@ -108,10 +136,23 @@ grep -q -- '--version' "$test_dir/help"
 if "$project_dir/install.sh" --version bad > /dev/null 2>&1; then echo 'invalid version accepted' >&2; exit 1; fi
 if "$project_dir/install.sh" --password-file > /dev/null 2>&1; then echo 'removed password option accepted' >&2; exit 1; fi
 
-cat "$project_dir/install.sh" | bash -s -- --dry-run --no-start > "$test_dir/dry-run"
+cat "$project_dir/install.sh" | bash -s -- --dry-run --no-start > "$test_dir/dry-run" 2> "$test_dir/progress"
 grep -q 'Release：v0.1.0' "$test_dir/dry-run"
 grep -q '/usr/local/libexec/webufw/webufw' "$test_dir/dry-run"
 grep -q '/releases/download/v0.1.0/' "$test_dir/curl-urls"
+grep -q '100.0%' "$test_dir/progress"
+[[ ! -e "$test_dir/sudo-args" ]]
+
+# Failed downloads must stop before sudo, and preserve the real failure reason.
+if WEBUFW_DOWNLOAD_ERROR=28 "$project_dir/install.sh" > "$test_dir/timeout" 2>&1; then echo 'timeout accepted' >&2; exit 1; fi
+grep -q '下載逾時或傳輸停滯（curl 28）' "$test_dir/timeout"
+if grep -q '找不到' "$test_dir/timeout"; then echo 'timeout reported as missing release' >&2; exit 1; fi
+if WEBUFW_DOWNLOAD_ERROR=22 WEBUFW_HTTP_STATUS=404 "$project_dir/install.sh" > "$test_dir/not-found" 2>&1; then echo '404 accepted' >&2; exit 1; fi
+grep -q "找不到 $asset（HTTP 404）" "$test_dir/not-found"
+if WEBUFW_DOWNLOAD_ERROR=22 WEBUFW_HTTP_STATUS=503 "$project_dir/install.sh" > "$test_dir/server-error" 2>&1; then echo '503 accepted' >&2; exit 1; fi
+grep -q '下載失敗（HTTP 503）' "$test_dir/server-error"
+if WEBUFW_DOWNLOAD_ERROR=6 "$project_dir/install.sh" > "$test_dir/dns-error" 2>&1; then echo 'DNS failure accepted' >&2; exit 1; fi
+grep -q 'curl 6' "$test_dir/dns-error"
 [[ ! -e "$test_dir/sudo-args" ]]
 
 if "$project_dir/install.sh" --no-start > /dev/null 2>&1; then echo 'removed the executable of an active legacy service' >&2; exit 1; fi

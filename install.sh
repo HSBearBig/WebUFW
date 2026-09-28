@@ -75,14 +75,39 @@ build_dir="$(mktemp -d "${TMPDIR:-/tmp}/webufw-install.XXXXXXXX")" || fail '無�
 trap 'rm -rf -- "$build_dir"' EXIT
 
 download() {
-    curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 "$1" -o "$2"
+    local url="$1" output="$2" label="$3" mode="${4:-metadata}"
+    local http_status result
+    local options=(--silent --max-time 120)
+    if [[ "$mode" == asset ]]; then
+        # Let slow downloads finish; only abort when transfer stalls for a minute.
+        options=(--progress-bar --max-time 0 --speed-limit 1 --speed-time 60)
+    fi
+    if http_status="$(curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
+        --connect-timeout 15 --retry 3 --retry-delay 2 --retry-connrefused \
+        "${options[@]}" --write-out '%{http_code}' "$url" -o "$output")"; then
+        return 0
+    else
+        result=$?
+    fi
+    case "$result" in
+        28)
+            fail "$label 下載逾時或傳輸停滯（curl 28）；自動重試後仍失敗，請檢查網路後重新執行安裝"
+            ;;
+        22)
+            if [[ "$http_status" == 404 ]]; then
+                fail "找不到 $label（HTTP 404）；請確認該版本及檔案已發布"
+            fi
+            fail "$label 下載失敗（HTTP $http_status）；請檢查 GitHub 回應或稍後重試"
+            ;;
+        *)
+            fail "$label 下載失敗（curl $result，HTTP ${http_status:-000}）；請依上方 curl 訊息檢查網路或稍後重試"
+            ;;
+    esac
 }
 
 if [[ -z "$version" ]]; then
     metadata_url="https://api.github.com/repos/HSBearBig/WebUFW/releases/latest"
-    if ! download "$metadata_url" "$build_dir/release.json"; then
-        fail '找不到最新正式版 Release；請確認第一版已發布'
-    fi
+    download "$metadata_url" "$build_dir/release.json" '最新正式版資訊'
     mapfile -t release_tags < <(sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' "$build_dir/release.json")
     if [[ "${#release_tags[@]}" != 1 || ! "${release_tags[0]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         fail '無法從 GitHub Release metadata 解析有效版本號'
@@ -91,12 +116,9 @@ if [[ -z "$version" ]]; then
 fi
 base_url="https://github.com/HSBearBig/WebUFW/releases/download/$version"
 printf '正在下載 WebUFW Release：%s\n' "$version"
-if ! download "$base_url/SHA256SUMS" "$build_dir/SHA256SUMS"; then
-    fail '找不到 Release 校驗檔；請確認該版本已發布'
-fi
-if ! download "$base_url/$asset" "$build_dir/webufw"; then
-    fail "找不到 $asset；請確認該版本已發布"
-fi
+download "$base_url/SHA256SUMS" "$build_dir/SHA256SUMS" 'Release 校驗檔'
+printf '正在下載 %s\n' "$asset"
+download "$base_url/$asset" "$build_dir/webufw" "$asset" asset
 mapfile -t matches < <(awk -v name="$asset" '$2 == name { print $1 }' "$build_dir/SHA256SUMS")
 if [[ "${#matches[@]}" != 1 || ! "${matches[0]}" =~ ^[0-9a-f]{64}$ ]]; then
     fail "Release 校驗檔缺少唯一有效的 $asset SHA256"
