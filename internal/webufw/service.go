@@ -86,6 +86,7 @@ type Service struct {
 	manager       *Manager
 	mu            sync.Mutex
 	config        Config
+	activeListen  string
 	configPath    string
 	loginFailures map[string][]time.Time
 	authVersion   int
@@ -93,7 +94,7 @@ type Service struct {
 }
 
 func NewService(m *Manager, c Config, path string) *Service {
-	return &Service{manager: m, config: c, configPath: path, loginFailures: map[string][]time.Time{}}
+	return &Service{manager: m, config: c, activeListen: c.Listen, configPath: path, loginFailures: map[string][]time.Time{}}
 }
 func decodeStrict(data []byte, v any) error {
 	if len(data) == 0 {
@@ -116,7 +117,7 @@ func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (an
 	case "status", "rules", "containers":
 		v, e := s.manager.State(ctx)
 		s.mu.Lock()
-		v.Environment.Listen = s.config.Listen
+		v.Environment.Listen = s.activeListen
 		s.mu.Unlock()
 		return v, e
 	case "preview":
@@ -153,7 +154,7 @@ func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (an
 	case "settings":
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return map[string]any{"listen": s.config.Listen, "username": "admin", "auth_version": s.authVersion}, nil
+		return map[string]any{"listen": s.config.Listen, "active_listen": s.activeListen, "restart_required": s.config.Listen != s.activeListen, "username": "admin", "auth_version": s.authVersion}, nil
 	case "sources":
 		st, installed, compatible := installedSource()
 		path := st.Path

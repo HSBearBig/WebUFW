@@ -38,6 +38,14 @@ func TestInitialPasswordPersistsAcrossRestartAndSettingsChanges(t *testing.T) {
 	if _, err = s.Call(t.Context(), "settings.update", json.RawMessage(`{"listen":"0.0.0.0:8088"}`)); err != nil {
 		t.Fatal(err)
 	}
+	settings, err := s.Call(t.Context(), "settings", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := settings.(map[string]any)
+	if values["active_listen"] != "127.0.0.1:8088" || values["restart_required"] != true {
+		t.Fatal("saved listener must not be reported as active", values)
+	}
 	restarted, newPassword, err := initializeConfig(path)
 	if err != nil || newPassword != "" || restarted.PasswordHash != c.PasswordHash || restarted.Listen != "0.0.0.0:8088" {
 		t.Fatal("restart must preserve the password and saved listener", err)

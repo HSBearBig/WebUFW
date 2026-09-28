@@ -3,6 +3,7 @@ package webufw
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -108,6 +109,61 @@ func TestIPListenAndWildcardHostValidation(t *testing.T) {
 		t.Fatal("cross-origin login accepted", r.Code)
 	}
 }
+
+func TestWildcardListenerServesHostIP(t *testing.T) {
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hostIP string
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err == nil && ip.To4() != nil && !ip.IsLoopback() && ip.IsGlobalUnicast() {
+			hostIP = ip.String()
+			break
+		}
+	}
+	if hostIP == "" {
+		t.Skip("no non-loopback IPv4 interface available")
+	}
+	ln, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWeb(t)
+	w.config.Listen = ln.Addr().String()
+	srv := server(w)
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve(ln)
+	_, port, _ := net.SplitHostPort(w.config.Listen)
+	origin := "http://" + net.JoinHostPort(hostIP, port)
+	transport := &http.Transport{} // Ignore the developer machine's HTTP proxy.
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	res, err := client.Get(origin + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatal("host IP page failed", res.StatusCode)
+	}
+	req, err := http.NewRequest("POST", origin+"/api/v1/login", strings.NewReader(`{"username":"admin","password":"test-password-123"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Content-Type", "application/json")
+	res, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || len(res.Cookies()) == 0 {
+		t.Fatal("host IP login failed", res.StatusCode)
+	}
+}
+
 func TestOptionalSourcesVisibleWithoutInstall(t *testing.T) {
 	w := newTestWeb(t)
 	host, origin := "127.0.0.1:8088", "http://127.0.0.1:8088"
