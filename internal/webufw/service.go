@@ -2,7 +2,6 @@ package webufw
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +48,29 @@ func readConfig(path string) (Config, error) {
 	}
 	return c, nil
 }
+
+// initializeConfig is called under the instance lock. Only the hash is persisted;
+// the initial password is returned once for the service journal.
+func initializeConfig(path string) (Config, string, error) {
+	c, err := readConfig(path)
+	if !os.IsNotExist(err) {
+		return c, "", err
+	}
+	c = Config{Listen: "127.0.0.1:8088"}
+	password := token()[:24]
+	c.PasswordHash, err = passwordHash(password)
+	if err != nil {
+		return Config{}, "", err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return Config{}, "", err
+	}
+	if err = atomicJSON(path, c, 0600); err != nil {
+		return Config{}, "", err
+	}
+	return c, password, nil
+}
+
 func passwordHash(s string) (string, error) {
 	if len([]byte(s)) < 12 || len([]byte(s)) > 72 {
 		return "", errors.New("密碼長度需為 12–72 位元組")
@@ -61,15 +83,13 @@ type Caller interface {
 	Call(context.Context, string, json.RawMessage) (any, error)
 }
 type Service struct {
-	manager           *Manager
-	mu                sync.Mutex
-	config            Config
-	configPath        string
-	loginFailures     map[string][]time.Time
-	authVersion       int
-	bootstrapCode     string
-	bootstrapAttempts int
-	sourceStage       *sourceStage
+	manager       *Manager
+	mu            sync.Mutex
+	config        Config
+	configPath    string
+	loginFailures map[string][]time.Time
+	authVersion   int
+	sourceStage   *sourceStage
 }
 
 func NewService(m *Manager, c Config, path string) *Service {
@@ -91,41 +111,6 @@ func decodeStrict(data []byte, v any) error {
 }
 func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (any, error) {
 	switch op {
-	case "setup.status":
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		return map[string]bool{"required": s.bootstrapCode != ""}, nil
-	case "setup.complete":
-		var in struct {
-			Code     string `json:"code"`
-			Password string `json:"password"`
-		}
-		if e := decodeStrict(data, &in); e != nil {
-			return nil, e
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.bootstrapCode == "" || s.bootstrapAttempts >= 5 {
-			return nil, errors.New("首次設定不可用；請重新啟動 WebUFW")
-		}
-		s.bootstrapAttempts++
-		if subtle.ConstantTimeCompare([]byte(in.Code), []byte(s.bootstrapCode)) != 1 {
-			return nil, errors.New("設定碼不正確")
-		}
-		h, e := passwordHash(in.Password)
-		if e != nil {
-			return nil, e
-		}
-		c := s.config
-		c.PasswordHash = h
-		if e = atomicJSON(s.configPath, c, 0600); e != nil {
-			return nil, e
-		}
-		s.config = c
-		s.bootstrapCode = ""
-		s.authVersion++
-		_ = s.manager.Record("setup.complete", "admin")
-		return map[string]bool{"ok": true}, nil
 	case "changes":
 		return s.manager.Changes(ctx)
 	case "status", "rules", "containers":
@@ -316,7 +301,7 @@ func (s *Service) Call(ctx context.Context, op string, data json.RawMessage) (an
 func configLocation() string { return filepath.Join("/etc/webufw", "config.json") }
 func ensureRoot() error {
 	if os.Geteuid() != 0 {
-		return errors.New("此指令需以 sudo 執行")
+		return errors.New("WebUFW 服務需要 root 權限")
 	}
 	return nil
 }

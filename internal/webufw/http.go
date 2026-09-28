@@ -38,8 +38,6 @@ func NewWeb(api Caller, c Config) *Web {
 	m.HandleFunc("GET /{$}", w.page)
 	m.HandleFunc("GET /assets/", w.asset)
 	m.HandleFunc("POST /api/v1/login", w.login)
-	m.HandleFunc("GET /api/v1/setup", w.setupStatus)
-	m.HandleFunc("POST /api/v1/setup", w.setupComplete)
 	m.HandleFunc("GET /api/v1/session", w.session)
 	m.HandleFunc("/api/v1/", w.apiRequest)
 	w.handler = w.security(m)
@@ -151,32 +149,6 @@ func (w *Web) getSession(r *http.Request) (string, session, bool) {
 }
 func (w *Web) secureCookie(r *http.Request) bool {
 	return r.TLS != nil
-}
-func (w *Web) setupStatus(rw http.ResponseWriter, r *http.Request) {
-	v, e := w.api.Call(r.Context(), "setup.status", nil)
-	if e != nil {
-		writeError(rw, 500, e)
-		return
-	}
-	writeJSON(rw, 200, v)
-}
-func (w *Web) setupComplete(rw http.ResponseWriter, r *http.Request) {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		writeError(rw, 403, errors.New("首次設定只允許本機連線"))
-		return
-	}
-	b, e := io.ReadAll(r.Body)
-	if e != nil {
-		writeError(rw, 400, e)
-		return
-	}
-	v, e := w.api.Call(r.Context(), "setup.complete", b)
-	if e != nil {
-		writeError(rw, 400, e)
-		return
-	}
-	writeJSON(rw, 200, v)
 }
 func (w *Web) login(rw http.ResponseWriter, r *http.Request) {
 	select {

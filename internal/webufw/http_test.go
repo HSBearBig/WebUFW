@@ -81,33 +81,6 @@ func newTestWeb(t *testing.T) *Web {
 	c := Config{Listen: "127.0.0.1:8088", PasswordHash: string(h)}
 	return NewWeb(NewService(m, c, ""), c)
 }
-func TestFirstRunSetupInBrowser(t *testing.T) {
-	m, _ := NewManager(newTestBackend(), "")
-	c := Config{Listen: "127.0.0.1:8088"}
-	path := t.TempDir() + "/config.json"
-	s := NewService(m, c, path)
-	s.bootstrapCode = "setup-code-123"
-	w := NewWeb(s, c)
-	host, origin := "127.0.0.1:8088", "http://127.0.0.1:8088"
-	if r := request(w, "GET", "/api/v1/setup", "", nil, "", "", host); r.Code != 200 || !strings.Contains(r.Body.String(), `"required":true`) {
-		t.Fatal(r.Code, r.Body.String())
-	}
-	if r := request(w, "POST", "/api/v1/setup", `{"code":"wrong","password":"long-password-123"}`, nil, "", origin, host); r.Code == 200 {
-		t.Fatal("invalid code accepted")
-	}
-	if r := request(w, "POST", "/api/v1/setup", `{"code":"setup-code-123","password":"long-password-123"}`, nil, "", origin, host); r.Code != 200 {
-		t.Fatal(r.Code, r.Body.String())
-	}
-	if _, err := readConfig(path); err != nil {
-		t.Fatal(err)
-	}
-	if r := request(w, "GET", "/api/v1/setup", "", nil, "", "", host); !strings.Contains(r.Body.String(), `"required":false`) {
-		t.Fatal(r.Body.String())
-	}
-	if r := request(w, "POST", "/api/v1/login", `{"username":"admin","password":"long-password-123"}`, nil, "", origin, host); r.Code != 200 {
-		t.Fatal(r.Code, r.Body.String())
-	}
-}
 func TestIPListenAndWildcardHostValidation(t *testing.T) {
 	for _, listen := range []string{"127.0.0.1:8088", "0.0.0.0:8088", "192.168.1.10:8088", "[::]:8088"} {
 		if err := (Config{Listen: listen}).Validate(); err != nil {
@@ -133,23 +106,6 @@ func TestIPListenAndWildcardHostValidation(t *testing.T) {
 	}
 	if r := request(w, "POST", "/api/v1/login", `{}`, nil, "", "http://evil.example:8088", "192.168.1.10:8088"); r.Code != 403 {
 		t.Fatal("cross-origin login accepted", r.Code)
-	}
-}
-func TestWildcardSetupRequiresLocalClient(t *testing.T) {
-	m, _ := NewManager(newTestBackend(), "")
-	c := Config{Listen: "0.0.0.0:8088"}
-	service := NewService(m, c, t.TempDir()+"/config.json")
-	service.bootstrapCode = "setup-code-123"
-	w := NewWeb(service, c)
-	r := httptest.NewRequest("POST", "http://192.168.1.10:8088/api/v1/setup", strings.NewReader(`{"code":"setup-code-123","password":"long-password-123"}`))
-	r.Host = "192.168.1.10:8088"
-	r.RemoteAddr = "192.168.1.20:9000"
-	r.Header.Set("Origin", "http://192.168.1.10:8088")
-	r.Header.Set("Content-Type", "application/json")
-	out := httptest.NewRecorder()
-	w.ServeHTTP(out, r)
-	if out.Code != 403 {
-		t.Fatal("remote bootstrap accepted", out.Code)
 	}
 }
 func TestOptionalSourcesVisibleWithoutInstall(t *testing.T) {

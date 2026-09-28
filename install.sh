@@ -5,15 +5,14 @@ usage() {
     cat <<'HELP'
 WebUFW 安裝入口（下載已發布的 Linux 執行檔）
 
-用法：./install.sh [--version vX.Y.Z] [--no-start] [--password-file PATH] [--dry-run]
+用法：./install.sh [--version vX.Y.Z] [--no-start] [--dry-run]
 
   --version VERSION    指定 GitHub Release；預設為最新正式版
   --no-start           只安裝檔案，不啟用或啟動服務
-  --password-file PATH 首次安裝時使用權限 0600 的密碼檔
   --dry-run            下載並校驗執行檔，預覽安裝內容，不修改系統
   -h, --help           顯示此說明
 
-請以一般使用者執行。腳本只在安裝階段呼叫 sudo；
+一般使用者執行時，腳本只在安裝階段呼叫 sudo；
 不會自動安裝 UFW、Docker、ufw-docker 或改動防火牆規則。
 HELP
 }
@@ -24,7 +23,7 @@ fail() {
 }
 
 version=""
-args=()
+no_start=false
 dry_run=false
 while (($#)); do
     case "$1" in
@@ -39,19 +38,10 @@ while (($#)); do
             [[ -n "$version" ]] || fail '--version 需要版本號'
             ;;
         --no-start)
-            args+=("$1")
+            no_start=true
             ;;
         --dry-run)
             dry_run=true
-            ;;
-        --password-file)
-            (($# >= 2)) || fail '--password-file 需要檔案路徑'
-            args+=("$1" "$2")
-            shift
-            ;;
-        --password-file=*)
-            [[ "${1#*=}" != "" ]] || fail '--password-file 需要檔案路徑'
-            args+=("$1")
             ;;
         -h|--help)
             usage
@@ -65,7 +55,6 @@ while (($#)); do
 done
 
 [[ "$(uname -s)" == Linux ]] || fail '目前只支援 Linux'
-(( EUID != 0 )) || fail '請以一般使用者執行 ./install.sh；腳本會在安裝階段呼叫 sudo'
 case "$(uname -m)" in
     x86_64|amd64) arch=amd64 ;;
     aarch64|arm64) arch=arm64 ;;
@@ -77,7 +66,7 @@ fi
 for command_name in curl sha256sum mktemp; do
     command -v "$command_name" >/dev/null 2>&1 || fail "找不到 $command_name"
 done
-if [[ "$dry_run" == false ]]; then
+if [[ "$dry_run" == false ]] && (( EUID != 0 )); then
     command -v sudo >/dev/null 2>&1 || fail '找不到 sudo；請先安裝 sudo'
 fi
 
@@ -118,9 +107,123 @@ actual="${actual%% *}"
 chmod 700 "$build_dir/webufw"
 printf 'SHA256 已確認：%s\n' "$actual"
 
+# All installation work lives here. The downloaded binary is only a service.
+install_system() {
+    set -euo pipefail
+    export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+    stage="$1"
+    no_start="$2"
+    for command_name in systemctl journalctl install getent useradd; do
+        command -v "$command_name" >/dev/null 2>&1 || { printf '找不到 %s\n' "$command_name" >&2; return 1; }
+    done
+    if [[ "$no_start" == true && -e /usr/local/bin/webufw ]] && systemctl is-active --quiet webufw.service; then
+        printf '舊版服務仍在執行；請先 sudo systemctl stop webufw 再使用 --no-start，或使用預設安裝流程自動重啟。\n' >&2
+        return 1
+    fi
+    if getent passwd webufw >/dev/null; then
+        [[ "$(id -u webufw)" != 0 && "$(id -g webufw)" != 0 ]] || { printf 'webufw 服務帳號不可為 root\n' >&2; return 1; }
+    else
+        useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin webufw
+    fi
+    install -d -o root -g root -m 0700 /etc/webufw /var/lib/webufw
+    install -d -o root -g root -m 0755 /usr/local/libexec/webufw
+    # Rename on the same filesystem so an upgrade never truncates a running binary.
+    binary_tmp="$(mktemp /usr/local/libexec/webufw/.webufw.XXXXXXXX)"
+    unit_tmp="$(mktemp /etc/systemd/system/.webufw.XXXXXXXX)"
+    trap 'rm -f -- "$binary_tmp" "$unit_tmp"' EXIT
+    install -o root -g root -m 0755 "$stage/webufw" "$binary_tmp"
+    install -o root -g root -m 0644 "$stage/webufw.service" "$unit_tmp"
+    for target in /usr/local/libexec/webufw/webufw /etc/systemd/system/webufw.service /usr/local/bin/webufw; do
+        if [[ -e "$target" || -L "$target" ]]; then
+            [[ -f "$target" && ! -L "$target" ]] || { printf '拒絕取代非一般檔案：%s\n' "$target" >&2; return 1; }
+        fi
+    done
+    mv -f -- "$binary_tmp" /usr/local/libexec/webufw/webufw
+    mv -f -- "$unit_tmp" /etc/systemd/system/webufw.service
+    systemctl daemon-reload
+    if [[ "$no_start" == true ]]; then
+        rm -f -- /usr/local/bin/webufw
+        printf 'WebUFW 已安裝；本次未啟用或啟動服務。\n啟動：sudo systemctl enable --now webufw\n初始密碼將在首次啟動時寫入服務日誌。\n'
+        return
+    fi
+    systemctl enable webufw.service
+    systemctl restart webufw.service
+    invocation="$(systemctl show webufw.service -p InvocationID --value)"
+    [[ "$invocation" =~ ^[0-9a-f]{32}$ ]] || { printf '無法取得服務啟動識別碼\n' >&2; return 1; }
+    # Wait for the HTTP socket to bind, not merely for systemd to launch a PID.
+    ready=false
+    for ((attempt=0; attempt<120; attempt++)); do
+        logs="$(journalctl -u webufw.service "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat)"
+        if [[ "$logs" == *'WebUFW ready:'* ]] && systemctl is-active --quiet webufw.service; then
+            ready=true
+            break
+        fi
+        current="$(systemctl show webufw.service -p InvocationID --value)"
+        [[ "$current" == "$invocation" ]] && systemctl is-active --quiet webufw.service || break
+        sleep 1
+    done
+    if [[ "$ready" != true ]]; then
+        printf '%s\n' "$logs" >&2
+        printf 'WebUFW 尚未成功啟動；請執行 sudo journalctl -u webufw -n 50 --no-pager 檢查。\n' >&2
+        return 1
+    fi
+    # The old agent may need its executable to recover pending changes during
+    # shutdown. Remove its public entry point only after the restart succeeds.
+    rm -f -- /usr/local/bin/webufw
+    printf '\nWebUFW 已安裝並啟用 systemd 服務。\n%s\n' "$logs"
+    if [[ "$logs" != *'WebUFW 初始密碼：'* ]]; then
+        printf '沿用既有管理者密碼；重新安裝不會重設密碼。\n'
+    fi
+    printf '預設網址：http://127.0.0.1:8088（僅本機；升級保留既有監聽設定）\n服務狀態：sudo systemctl status webufw --no-pager -l\n查閱初始密碼：sudo journalctl -u webufw --no-pager --grep="WebUFW 初始密碼"\n安裝未修改任何 UFW 規則。\n'
+}
+
+cat > "$build_dir/webufw.service" <<'UNIT'
+[Unit]
+Description=WebUFW firewall management
+After=network.target ufw.service docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/webufw/webufw
+Restart=on-failure
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=180
+UMask=0077
+RuntimeDirectory=webufw
+RuntimeDirectoryMode=0750
+StateDirectory=webufw
+StateDirectoryMode=0700
+Environment=GOMEMLIMIT=24MiB
+Environment=GOGC=80
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=-/etc/ufw -/etc/default/ufw /etc/webufw
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 if [[ "$dry_run" == true ]]; then
-    "$build_dir/webufw" install --dry-run "${args[@]}"
+    printf '將安裝 /usr/local/libexec/webufw/webufw、webufw 服務帳號與 webufw.service；移除舊版 /usr/local/bin/webufw 指令。\n'
+    if [[ "$no_start" == true ]]; then
+        printf '本次不啟用或啟動服務。\n'
+    else
+        printf '安裝後啟用並啟動服務；初始密碼由服務產生並寫入日誌，既有密碼保持不變。\n'
+    fi
+    printf '不會安裝 UFW、Docker 或 ufw-docker，也不會修改防火牆規則。\n'
 else
-    printf '校驗完成；現在透過 sudo 安裝並設定 systemd。\n'
-    sudo -- "$build_dir/webufw" install "${args[@]}"
+    # Use a file rather than bash -s: stdin may still be the curl pipeline.
+    { declare -f install_system; printf 'install_system "$@"\n'; } > "$build_dir/install-system.sh"
+    printf '校驗完成；現在安裝並設定 systemd。\n'
+    if (( EUID == 0 )); then
+        bash "$build_dir/install-system.sh" "$build_dir" "$no_start"
+    else
+        sudo -- bash "$build_dir/install-system.sh" "$build_dir" "$no_start"
+    fi
 fi

@@ -55,7 +55,19 @@ jobs:
           set -euo pipefail
           cd "dist/$RELEASE_TAG"
           sha256sum -c SHA256SUMS
-          [[ "$(./webufw-linux-amd64 version)" == "WebUFW $RELEASE_TAG" ]]
+          # Exercise the private web process without starting the root agent.
+          WEBUFW_PROCESS=web WEBUFW_LISTEN=127.0.0.1:18088 ./webufw-linux-amd64 &
+          web_pid=$!
+          trap 'kill "$web_pid" 2>/dev/null || true; wait "$web_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..20}; do
+            kill -0 "$web_pid"
+            if curl --noproxy '*' -fsS --max-time 2 http://127.0.0.1:18088/ -o /tmp/webufw-release-page.html; then
+              break
+            fi
+            sleep 0.2
+          done
+          kill -0 "$web_pid"
+          grep -F "<footer>WebUFW <span>$RELEASE_TAG</span>" /tmp/webufw-release-page.html
           test -s webufw-linux-arm64
 
       - name: Save assets for publication

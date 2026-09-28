@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +15,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
-	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -124,20 +122,9 @@ func timer(ctx context.Context, m *Manager) {
 		}
 	}
 }
-func Run(args []string) error {
-	if len(args) > 0 {
-		return errors.New("run 不接受額外參數；監聽設定使用 /etc/webufw/config.json")
-	}
+func Run() error {
 	if e := ensureRoot(); e != nil {
 		return e
-	}
-	c, e := readConfig(configLocation())
-	firstRun := os.IsNotExist(e)
-	if e != nil && !firstRun {
-		return e
-	}
-	if firstRun {
-		c = Config{Listen: "127.0.0.1:8088"}
 	}
 	account, e := user.Lookup("webufw")
 	if e != nil {
@@ -168,6 +155,13 @@ func Run(args []string) error {
 	if e = syscall.Flock(int(instance.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
 		return errors.New("WebUFW 已在執行")
 	}
+	c, password, e := initializeConfig(configLocation())
+	if e != nil {
+		return e
+	}
+	if password != "" {
+		log.Printf("WebUFW 初始密碼：admin / %s（登入後可於設定頁修改密碼）", password)
+	}
 	_ = os.Remove(socketPath)
 	ln, e := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if e != nil {
@@ -195,13 +189,6 @@ func Run(args []string) error {
 	}
 	cancelRecover()
 	s := NewService(m, c, configLocation())
-	if firstRun {
-		if e = os.MkdirAll("/etc/webufw", 0700); e != nil {
-			return e
-		}
-		s.bootstrapCode = token()[:24]
-		log.Printf("首次設定：開啟 http://%s 並輸入一次性設定碼 %s。此碼僅在本次啟動有效。", c.Listen, s.bootstrapCode)
-	}
 	srv := server(rpcHandler(s))
 	peerListener := &checkedListener{UnixListener: ln, uid: uint32(uid)}
 	serveDone := make(chan error, 1)
@@ -210,8 +197,8 @@ func Run(args []string) error {
 	if e != nil {
 		return e
 	}
-	child := exec.Command(exe, "_web", "--listen", c.Listen)
-	child.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "GOMEMLIMIT=24MiB", "GOGC=80"}
+	child := exec.Command(exe)
+	child.Env = []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "GOMEMLIMIT=24MiB", "GOGC=80", "WEBUFW_PROCESS=web", "WEBUFW_LISTEN=" + c.Listen}
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
 	child.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}}, Pdeathsig: syscall.SIGTERM}
@@ -281,22 +268,22 @@ func (l *checkedListener) Accept() (net.Conn, error) {
 		c.Close()
 	}
 }
-func ServeChild(args []string) error {
+func ServeChild() error {
 	if os.Geteuid() == 0 {
 		return errors.New("web 子程序不得使用 root")
 	}
-	fs := flag.NewFlagSet("_web", flag.ContinueOnError)
-	listen := fs.String("listen", "", "listen address")
-	if e := fs.Parse(args); e != nil {
-		return e
-	}
-	c := Config{Listen: *listen}
+	c := Config{Listen: os.Getenv("WEBUFW_LISTEN")}
 	if e := c.Validate(); e != nil {
 		return e
 	}
 	w := NewWeb(NewRemote(socketPath), c)
 	srv := server(w)
-	srv.Addr = c.Listen
+	ln, e := net.Listen("tcp", c.Listen)
+	if e != nil {
+		return e
+	}
+	defer ln.Close()
+	log.Printf("WebUFW ready: %s；監聽 %s", Version, c.Listen)
 	ctx, cancel := contextSignals()
 	defer cancel()
 	go func() {
@@ -305,33 +292,9 @@ func ServeChild(args []string) error {
 		defer done()
 		srv.Shutdown(stop)
 	}()
-	e := srv.ListenAndServe()
+	e = srv.Serve(ln)
 	if e == http.ErrServerClosed {
 		return nil
 	}
 	return e
-}
-func Resolve(args []string) error {
-	if e := ensureRoot(); e != nil {
-		return e
-	}
-	if len(args) != 1 || args[0] != "--acknowledge-current-state" {
-		return errors.New("人工檢查目前 UFW 規則後，使用 webufw resolve --acknowledge-current-state 清除衝突紀錄")
-	}
-	if e := os.MkdirAll("/run/webufw", 0750); e != nil {
-		return e
-	}
-	f, e := os.OpenFile("/run/webufw/instance.lock", os.O_CREATE|os.O_RDWR, 0600)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
-		return errors.New("請先停止 WebUFW")
-	}
-	p := "/var/lib/webufw/pending.json"
-	if _, e = os.Stat(p); e != nil {
-		return e
-	}
-	return os.Rename(p, filepath.Join(filepath.Dir(p), "resolved-"+time.Now().UTC().Format("20060102T150405")+".json"))
 }

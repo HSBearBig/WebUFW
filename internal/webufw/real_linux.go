@@ -118,7 +118,7 @@ func (b *RealBackend) ufw(ctx context.Context, args []string) ([]byte, error) {
 	if b.lock == nil {
 		return nil, errors.New("UFW lock is not held")
 	}
-	return runCommand(ctx, b.executable, append([]string{"_ufw"}, args...), []string{"WEBUFW_LOCK_PID=" + strconv.Itoa(os.Getpid())}, []*os.File{b.lock})
+	return runCommand(ctx, b.executable, args, []string{"WEBUFW_PROCESS=ufw", "WEBUFW_LOCK_PID=" + strconv.Itoa(os.Getpid())}, []*os.File{b.lock})
 }
 func readBounded(path string) ([]byte, error) {
 	f, e := os.Open(path)
@@ -345,7 +345,7 @@ func (b *RealBackend) Execute(ctx context.Context, s Step) error {
 		if e != nil || digestBytes(script) != legacyVerifiedSHA256 {
 			return errors.New("ufw-docker 版本已變更")
 		}
-		_, e = runCommand(ctx, scriptPath, s.Args, []string{"WEBUFW_LOCK_PID=" + strconv.Itoa(os.Getpid()), "WEBUFW_EXECUTABLE=" + b.executable}, []*os.File{b.lock})
+		_, e = runCommand(ctx, scriptPath, s.Args, []string{"WEBUFW_PROCESS=ufw", "WEBUFW_LOCK_PID=" + strconv.Itoa(os.Getpid()), "WEBUFW_EXECUTABLE=" + b.executable}, []*os.File{b.lock})
 		return e
 	default:
 		return errors.New("unsupported command")
